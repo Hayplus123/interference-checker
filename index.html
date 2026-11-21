@@ -51,14 +51,15 @@
       background: #1e293b;
       color: var(--text);
       border: 1px solid var(--border);
-      padding: 10px 16px;
+      padding: 10px 14px;
       border-radius: 8px;
       font-weight: 600;
       cursor: pointer;
-      font-size: 0.88rem;
+      font-size: 0.86rem;
       transition: 0.15s ease;
     }
-    button:hover { border-color: var(--accent); }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
     button.primary {
       background: var(--accent);
       color: #06101c;
@@ -160,7 +161,7 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 14px 16px;
-      max-height: 150px;
+      max-height: 160px;
       overflow-y: auto;
       font-size: 0.8rem;
       color: var(--muted);
@@ -170,6 +171,7 @@
     }
     .log-entry span.time { color: var(--accent); margin-right: 8px; }
     .log-entry.alert { color: #fca5a5; }
+    .log-entry.ok { color: #6ee7b7; }
   </style>
 </head>
 <body>
@@ -180,6 +182,7 @@
         <p>Low-overhead jitter, packet loss &amp; Wi-Fi stability monitor</p>
       </div>
       <div class="controls">
+        <button id="checkEndpointsBtn" type="button">Check Endpoints</button>
         <button id="testBeepBtn" type="button">Test Beep</button>
         <button id="recalBtn" type="button">Recalibrate</button>
         <button id="toggleBtn" class="primary" type="button">Arm Scanner</button>
@@ -206,7 +209,7 @@
       <div class="card">
         <div class="card-label">Rolling Jitter</div>
         <div id="jitterVal" class="card-val">-- ms</div>
-        <div class="card-sub">FaceTime target: &lt; 35 ms</div>
+        <div class="card-sub">FaceTime target: less than 35 ms</div>
       </div>
       <div class="card">
         <div class="card-label">Packet Loss (25p)</div>
@@ -252,7 +255,7 @@
     </div>
 
     <div id="logBox" class="log">
-      <div class="log-entry"><span class="time">[READY]</span>Click "Arm Scanner" to unlock audio alerts and start 12-second baseline calibration.</div>
+      <div class="log-entry"><span class="time">[READY]</span>Use "Check Endpoints" to verify URLs aren't blocked, or click "Arm Scanner" to begin.</div>
     </div>
   </div>
 
@@ -265,15 +268,17 @@
 
     const PROBE_INTERVAL_MS = 1200;
     const TIMEOUT_MS = 850;
-    const CALIBRATION_SAMPLES = 10; // ~12 seconds
+    const SELF_CHECK_TIMEOUT_MS = 1200;
+    const CALIBRATION_SAMPLES = 10;
 
     let running = false;
+    let checkingEndpoints = false;
     let timer = null;
     let audioCtx = null;
     let wakeLock = null;
     let endpointIdx = 0;
 
-    let samples = []; // { ms, ok, jitter }
+    let samples = [];
     let calibrationBuffer = [];
     let baselineMs = null;
     let badStreak = 0;
@@ -282,6 +287,7 @@
     let totalDropped = 0;
 
     const toggleBtn = document.getElementById("toggleBtn");
+    const checkEndpointsBtn = document.getElementById("checkEndpointsBtn");
     const testBeepBtn = document.getElementById("testBeepBtn");
     const recalBtn = document.getElementById("recalBtn");
     const statusBanner = document.getElementById("statusBanner");
@@ -303,13 +309,13 @@
     const canvas = document.getElementById("chart");
     const ctx = canvas.getContext("2d");
 
-    function logEvent(msg, isAlert = false) {
+    function logEvent(msg, tone = "") {
       const now = new Date().toLocaleTimeString([], { hour12: false });
       const div = document.createElement("div");
-      div.className = "log-entry" + (isAlert ? " alert" : "");
+      div.className = "log-entry" + (tone ? ` ${tone}` : "");
       div.innerHTML = `<span class="time">[${now}]</span>${msg}`;
       logBox.prepend(div);
-      while (logBox.children.length > 35) logBox.removeChild(logBox.lastChild);
+      while (logBox.children.length > 40) logBox.removeChild(logBox.lastChild);
     }
 
     function ensureAudio() {
@@ -382,33 +388,65 @@
       return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
     }
 
+    async function probeOnce(url, timeoutMs) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const start = performance.now();
+      try {
+        await fetch(`${url}?_=${Date.now()}-${Math.random()}`, {
+          mode: "no-cors",
+          cache: "no-store",
+          signal: controller.signal
+        });
+        return { ok: true, ms: Math.round(performance.now() - start) };
+      } catch (err) {
+        const isTimeout = err && err.name === "AbortError";
+        return { ok: false, ms: timeoutMs, reason: isTimeout ? "timeout" : "blocked/network error" };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    async function runEndpointSelfCheck() {
+      if (checkingEndpoints) return;
+      checkingEndpoints = true;
+      checkEndpointsBtn.disabled = true;
+      checkEndpointsBtn.textContent = "Checking...";
+      logEvent("Running endpoint self-check across all probe targets...");
+
+      let blockedCount = 0;
+      for (const ep of ENDPOINTS) {
+        const res = await probeOnce(ep.url, SELF_CHECK_TIMEOUT_MS);
+        if (res.ok) {
+          logEvent(`SELF-CHECK PASS: ${ep.name} (${ep.url}) responded in ${res.ms} ms.`, "ok");
+        } else {
+          blockedCount++;
+          logEvent(`SELF-CHECK FAIL: ${ep.name} (${ep.url}) — ${res.reason}.`, "alert");
+        }
+      }
+
+      if (blockedCount === 0) {
+        logEvent("All probe endpoints reachable on this network.", "ok");
+      } else if (blockedCount < ENDPOINTS.length) {
+        logEvent(`${blockedCount} endpoint(s) blocked/timed out; scanner will still rotate across reachable targets.`, "alert");
+      } else {
+        logEvent("All probe endpoints failed — check firewall, DNS filter, ad-blocker, or Wi-Fi connection.", "alert");
+      }
+
+      checkingEndpoints = false;
+      checkEndpointsBtn.disabled = false;
+      checkEndpointsBtn.textContent = "Check Endpoints";
+    }
+
     async function runProbe() {
       if (!running) return;
       const target = ENDPOINTS[endpointIdx % ENDPOINTS.length];
       endpointIdx++;
       endpointLabel.textContent = `Endpoint: ${target.name}`;
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-      const start = performance.now();
-
-      let latency = TIMEOUT_MS;
-      let ok = false;
-
-      try {
-        await fetch(`${target.url}?_=${Date.now()}-${Math.random()}`, {
-          mode: "no-cors",
-          cache: "no-store",
-          signal: controller.signal
-        });
-        latency = Math.round(performance.now() - start);
-        ok = true;
-      } catch {
-        latency = TIMEOUT_MS;
-        ok = false;
-      } finally {
-        clearTimeout(timeoutId);
-      }
+      const res = await probeOnce(target.url, TIMEOUT_MS);
+      const ok = res.ok;
+      const latency = res.ms;
 
       if (!ok) {
         totalDropped++;
@@ -431,7 +469,7 @@
         if (calibrationBuffer.length >= CALIBRATION_SAMPLES) {
           baselineMs = Math.round(median(calibrationBuffer));
           baseSub.textContent = `Baseline: ${baselineMs} ms`;
-          logEvent(`Baseline calibrated at ${baselineMs} ms.`);
+          logEvent(`Baseline calibrated at ${baselineMs} ms.`, "ok");
         }
         drawChart();
         return;
@@ -494,7 +532,7 @@
         if (now - lastBeepTime >= cooldown) {
           playAlertBeep(confirmedDrop ? "bad" : "warn");
           lastBeepTime = now;
-          logEvent(`ALERT: ${reason}`, true);
+          logEvent(`ALERT: ${reason}`, "alert");
         }
       } else if (!ok || badStreak === 1 || avgJitter > maxJitter * 0.75) {
         setBanner("warn", "Minor Fluctuation Detected", "Monitoring closely — waiting to confirm before alarm.");
@@ -588,6 +626,8 @@
       if (running) stopScanner();
       else startScanner();
     });
+
+    checkEndpointsBtn.addEventListener("click", runEndpointSelfCheck);
 
     testBeepBtn.addEventListener("click", () => {
       playAlertBeep("bad");
