@@ -25,6 +25,29 @@
       display: flex;
       justify-content: center;
       padding: 20px;
+      transition: background 0.15s ease;
+    }
+    @keyframes redFlashBg {
+      0%, 100% { background: #0b0f17; }
+      50% { background: #5c0b12; }
+    }
+    @keyframes redFlashBanner {
+      0%, 100% {
+        border-color: #ef4444;
+        background: rgba(239, 68, 68, 0.22);
+        box-shadow: 0 0 0 rgba(239, 68, 68, 0);
+      }
+      50% {
+        border-color: #ff6b6b;
+        background: rgba(220, 38, 38, 0.48);
+        box-shadow: 0 0 28px rgba(239, 68, 68, 0.65);
+      }
+    }
+    body.flash-critical {
+      animation: redFlashBg 0.45s ease-in-out 8;
+    }
+    .status-banner.flash-critical {
+      animation: redFlashBanner 0.45s ease-in-out 8;
     }
     .container {
       width: 100%;
@@ -214,7 +237,7 @@
     <header>
       <div class="title-group">
         <h1>CALLGUARD // FACETIME LINK SCANNER</h1>
-        <p>6-probe burst check • 4/6 Low • 5/6 Medium • 6/6 High</p>
+        <p>6-probe burst check • 4/6 Low • 5/6 Medium • 6/6 High (Flash + Notify)</p>
       </div>
       <div class="controls">
         <button id="checkEndpointsBtn" type="button">Check Endpoints</button>
@@ -315,7 +338,7 @@
     </div>
 
     <div id="logBox" class="log">
-      <div class="log-entry"><span class="time">[READY]</span>Put low.mp3, medium.mp3, and high.mp3 next to index.html, then click Arm Scanner.</div>
+      <div class="log-entry"><span class="time">[READY]</span>Arm Scanner to request notification permission, keep screen awake, and monitor FaceTime stability.</div>
     </div>
   </div>
 
@@ -332,11 +355,13 @@
     const SELF_CHECK_TIMEOUT_MS = 1300;
     const CALIBRATION_SAMPLES = 10;
     const BURST_TOTAL_PROBES = 6;
+    const BASE_TITLE = "CallGuard — FaceTime & Wi-Fi Stability Scanner";
 
     let running = false;
     let verifyingBurst = false;
     let checkingEndpoints = false;
     let timer = null;
+    let titleFlashTimer = null;
     let audioCtx = null;
     let wakeLock = null;
     let endpointIdx = 0;
@@ -392,6 +417,58 @@
       if (audioCtx.state === "suspended") audioCtx.resume();
     }
 
+    async function ensureNotificationPermission() {
+      if (!("Notification" in window)) return;
+      if (Notification.permission === "default") {
+        try {
+          const perm = await Notification.requestPermission();
+          logEvent(`Notification permission: ${perm}.`, perm === "granted" ? "ok" : "filter");
+        } catch {
+          // Ignore if blocked
+        }
+      }
+    }
+
+    function sendCriticalNotification(reason) {
+      if (!("Notification" in window) || Notification.permission !== "granted") return;
+      try {
+        const n = new Notification("CallGuard: 6/6 Probes Failed!", {
+          body: `${reason} — Check your FaceTime connection now.`,
+          tag: "callguard-6of6",
+          renotify: true
+        });
+        n.onclick = () => {
+          window.focus();
+          n.close();
+        };
+      } catch {
+        // Ignore notification errors in restricted contexts
+      }
+    }
+
+    function flashRedAlert() {
+      document.body.classList.remove("flash-critical");
+      statusBanner.classList.remove("flash-critical");
+      // Force reflow so animation restarts cleanly
+      void document.body.offsetWidth;
+      document.body.classList.add("flash-critical");
+      statusBanner.classList.add("flash-critical");
+
+      if (titleFlashTimer) clearInterval(titleFlashTimer);
+      let toggle = false;
+      let ticks = 0;
+      titleFlashTimer = setInterval(() => {
+        toggle = !toggle;
+        ticks++;
+        document.title = toggle ? "!!! 6/6 CALL DROP RISK !!!" : BASE_TITLE;
+        if (ticks >= 12) {
+          clearInterval(titleFlashTimer);
+          titleFlashTimer = null;
+          document.title = BASE_TITLE;
+        }
+      }, 450);
+    }
+
     function playFallbackTone(severity) {
       ensureAudio();
       const now = audioCtx.currentTime;
@@ -428,6 +505,12 @@
       lastBeepTime = now;
 
       logEvent(`ALERT [${severity.toUpperCase()}]: ${reason}`, "alert");
+
+      if (severity === "high") {
+        flashRedAlert();
+        sendCriticalNotification(reason);
+      }
+
       if (muteCheck.checked) return;
 
       const src = getMp3PathForSeverity(severity);
@@ -603,11 +686,10 @@
       }
 
       const okCount = burstResults.filter(r => r.ok).length;
-      const failedCount = burstResults.filter(r => r.anomalous).length; // failed/anomalous out of 6
+      const failedCount = burstResults.filter(r => r.anomalous).length;
       const maxBurstPing = Math.max(...burstResults.filter(r => r.ok).map(r => r.ms), 0);
       const maxBurstJitter = Math.max(...burstResults.map(r => r.jitter), 0);
 
-      // Majority worked (4+ of 6 ok, fewer than 3 failed) -> treat as ad blocker / filter interference
       if (okCount >= 4 && failedCount < 3) {
         verifyVal.textContent = "Ad-Block?";
         streakSub.textContent = `${failedCount}/6 failed (${okCount}/6 ok) — likely filter`;
@@ -617,7 +699,6 @@
         return;
       }
 
-      // Fewer than 3 out of 6 failed -> treat as local computer/browser lag blip
       if (failedCount < 3) {
         verifyVal.textContent = "Lag Cleared";
         streakSub.textContent = `${failedCount}/6 failed — likely local lag`;
@@ -627,8 +708,6 @@
         return;
       }
 
-      // Exact severity mapping on 6-probe burst:
-      // 6/6 failed -> high, 5/6 failed -> medium, 3-4/6 failed -> low
       let severity = "low";
       if (failedCount >= 6) {
         severity = "high";
@@ -749,8 +828,9 @@
       });
     }
 
-    function startScanner() {
+    async function startScanner() {
       ensureAudio();
+      await ensureNotificationPermission();
       running = true;
       toggleBtn.textContent = "Disarm Scanner";
       toggleBtn.classList.add("active");
@@ -794,6 +874,9 @@
         ensureAudio();
         const src = getMp3PathForSeverity(sev);
         logEvent(`Testing ${sev.toUpperCase()} sound (${src || "fallback tone"})...`);
+        if (sev === "high") {
+          flashRedAlert();
+        }
         if (muteCheck.checked) {
           logEvent("Audio is currently muted.", "filter");
           return;
