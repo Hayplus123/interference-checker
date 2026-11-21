@@ -214,7 +214,7 @@
     <header>
       <div class="title-group">
         <h1>CALLGUARD // FACETIME LINK SCANNER</h1>
-        <p>6-probe lag verification, majority ad-block check &amp; severity MP3 alerts</p>
+        <p>6-probe burst check • 4/6 Low • 5/6 Medium • 6/6 High</p>
       </div>
       <div class="controls">
         <button id="checkEndpointsBtn" type="button">Check Endpoints</button>
@@ -253,7 +253,7 @@
       <div class="card">
         <div class="card-label">Verification Mode</div>
         <div id="verifyVal" class="card-val">Idle</div>
-        <div id="streakSub" class="card-sub">Confirm burst: 6 probes max</div>
+        <div id="streakSub" class="card-sub">4/6 Low • 5/6 Med • 6/6 High</div>
       </div>
     </div>
 
@@ -292,21 +292,21 @@
       <div class="sound-grid">
         <div class="sound-item">
           <div class="sound-item-top">
-            <span><strong>LOW</strong> Severity MP3</span>
+            <span><strong>LOW</strong> (3–4/6 fail) MP3</span>
             <button type="button" class="mini-btn" data-test-sev="low">Test</button>
           </div>
           <input type="text" id="mp3Low" value="low.mp3" placeholder="e.g. low.mp3" />
         </div>
         <div class="sound-item">
           <div class="sound-item-top">
-            <span><strong>MEDIUM</strong> Severity MP3</span>
+            <span><strong>MEDIUM</strong> (5/6 fail) MP3</span>
             <button type="button" class="mini-btn" data-test-sev="medium">Test</button>
           </div>
           <input type="text" id="mp3Medium" value="medium.mp3" placeholder="e.g. medium.mp3" />
         </div>
         <div class="sound-item">
           <div class="sound-item-top">
-            <span><strong>HIGH</strong> Severity MP3</span>
+            <span><strong>HIGH</strong> (6/6 fail) MP3</span>
             <button type="button" class="mini-btn" data-test-sev="high">Test</button>
           </div>
           <input type="text" id="mp3High" value="high.mp3" placeholder="e.g. high.mp3" />
@@ -320,7 +320,6 @@
   </div>
 
   <script>
-    // Domain URLs work cleanly with Brave Shields and common privacy filters
     const ENDPOINTS = [
       { name: "Cloudflare Trace", url: "https://cloudflare.com/cdn-cgi/trace" },
       { name: "Google 204",       url: "https://www.google.com/generate_204" },
@@ -332,7 +331,7 @@
     const TIMEOUT_MS = 900;
     const SELF_CHECK_TIMEOUT_MS = 1300;
     const CALIBRATION_SAMPLES = 10;
-    const BURST_TOTAL_PROBES = 6; // 1 initial anomaly + 5 re-checks = 6 total
+    const BURST_TOTAL_PROBES = 6;
 
     let running = false;
     let verifyingBurst = false;
@@ -442,7 +441,6 @@
         audio.volume = 1.0;
         await audio.play();
       } catch {
-        // Fallback if the MP3 file hasn't been uploaded yet or browser blocks playback
         playFallbackTone(severity);
       }
     }
@@ -563,8 +561,8 @@
     async function runConfirmBurst(initialResult, initialJitter, initialEndpoint) {
       verifyingBurst = true;
       verifyVal.textContent = "Burst 1/6";
-      streakSub.textContent = "Checking 5 more times to rule out lag...";
-      setBanner("warn", "Verifying Anomaly (Probe 1 of 6)...", "Running extra checks to confirm this isn't local lag or ad-blocker filtering.");
+      streakSub.textContent = "Running 5 more checks to verify...";
+      setBanner("warn", "Verifying Anomaly (Probe 1 of 6)...", "Running 6 total checks to rule out lag or ad-blocker filtering.");
 
       const burstResults = [
         {
@@ -579,7 +577,7 @@
       for (let i = 2; i <= BURST_TOTAL_PROBES; i++) {
         if (!running) {
           verifyingBurst = false;
-          verifyVal.textContent = "Armed";
+          verifyVal.textContent = "Idle";
           return;
         }
         await sleep(BURST_GAP_MS);
@@ -604,50 +602,46 @@
         drawChart();
       }
 
-      // Evaluate the 6-probe burst
       const okCount = burstResults.filter(r => r.ok).length;
-      const failCount = BURST_TOTAL_PROBES - okCount;
-      const anomalousCount = burstResults.filter(r => r.anomalous).length;
+      const failedCount = burstResults.filter(r => r.anomalous).length; // failed/anomalous out of 6
       const maxBurstPing = Math.max(...burstResults.filter(r => r.ok).map(r => r.ms), 0);
       const maxBurstJitter = Math.max(...burstResults.map(r => r.jitter), 0);
 
-      // Rule 1: If majority of probes worked cleanly (4+ of 6 ok) and failures were non-timeout blocks,
-      // treat failing endpoints as ad-blocker / filter interference rather than a connection outage.
-      if (okCount >= 4 && anomalousCount <= 2) {
+      // Majority worked (4+ of 6 ok, fewer than 3 failed) -> treat as ad blocker / filter interference
+      if (okCount >= 4 && failedCount < 3) {
         verifyVal.textContent = "Ad-Block?";
-        streakSub.textContent = `${okCount}/6 passed — likely ad blocker/filter`;
-        setBanner("good", "Likely Ad-Blocker / Filter Interference", `${okCount}/6 probes passed cleanly; treating minor blocks as local filtering.`);
-        logEvent(`Burst ${okCount}/6 OK (${failCount} blocked/filtered) — assumed ad blocker/filter, no call alarm.`, "filter");
+        streakSub.textContent = `${failedCount}/6 failed (${okCount}/6 ok) — likely filter`;
+        setBanner("good", "Likely Ad-Blocker / Filter Interference", `${okCount}/6 probes succeeded; treating minor blocks as local filtering.`);
+        logEvent(`Burst ${failedCount}/6 failed (${okCount}/6 ok) — assumed ad blocker/filter, no alarm.`, "filter");
         verifyingBurst = false;
         return;
       }
 
-      // Rule 2: If majority of the 6 probes were normal (fewer than 4 anomalous), blame local lag/blip
-      if (anomalousCount < 4) {
+      // Fewer than 3 out of 6 failed -> treat as local computer/browser lag blip
+      if (failedCount < 3) {
         verifyVal.textContent = "Lag Cleared";
-        streakSub.textContent = `${anomalousCount}/6 bad — likely computer/browser lag`;
-        setBanner("good", "Brief Lag / Blip — Link Mostly Clear", `${anomalousCount}/6 burst checks flagged; suppressed false alarm.`);
-        logEvent(`Burst check: only ${anomalousCount}/6 anomalous — treated as local lag/blip.`, "ok");
+        streakSub.textContent = `${failedCount}/6 failed — likely local lag`;
+        setBanner("good", "Brief Lag / Blip — Link Mostly Clear", `Only ${failedCount}/6 checks failed; suppressed false alarm.`);
+        logEvent(`Burst ${failedCount}/6 failed — treated as local lag/blip.`, "ok");
         verifyingBurst = false;
         return;
       }
 
-      // Rule 3: Confirmed real issue across the 6-probe burst -> pick severity & play sound
+      // Exact severity mapping on 6-probe burst:
+      // 6/6 failed -> high, 5/6 failed -> medium, 3-4/6 failed -> low
       let severity = "low";
-      if (failCount >= 4 || maxBurstPing >= 260 || maxBurstJitter >= 80) {
+      if (failedCount >= 6) {
         severity = "high";
-      } else if (failCount >= 2 || maxBurstPing >= 170 || maxBurstJitter >= 50) {
+      } else if (failedCount >= 5) {
         severity = "medium";
+      } else {
+        severity = "low";
       }
 
-      const reason =
-        failCount >= 3
-          ? `${failCount}/6 burst probes dropped/failed (peak ping ${maxBurstPing} ms, jitter ${maxBurstJitter} ms)`
-          : `Confirmed instability across ${anomalousCount}/6 checks (peak ping ${maxBurstPing} ms, jitter ${maxBurstJitter} ms)`;
-
-      verifyVal.textContent = severity.toUpperCase();
-      streakSub.textContent = `Confirmed: ${anomalousCount}/6 bad (${failCount} drops)`;
-      setBanner("bad", `CONFIRMED CALL RISK (${severity.toUpperCase()})`, reason);
+      const reason = `${failedCount}/6 probes failed (peak ping ${maxBurstPing} ms, jitter ${maxBurstJitter} ms)`;
+      verifyVal.textContent = `${failedCount}/6 ${severity.toUpperCase()}`;
+      streakSub.textContent = `${failedCount}/6 failed -> ${severity.toUpperCase()} alert`;
+      setBanner("bad", `CALL RISK (${severity.toUpperCase()} — ${failedCount}/6 FAILED)`, reason);
 
       await triggerSeverityAlert(severity, reason);
       verifyingBurst = false;
@@ -691,7 +685,7 @@
         await runConfirmBurst(res, jitter, target.name);
       } else {
         verifyVal.textContent = "Armed";
-        streakSub.textContent = "Confirm burst: 6 probes max";
+        streakSub.textContent = "4/6 Low • 5/6 Med • 6/6 High";
         setBanner("good", "Link Stable — Safe for FaceTime", `Ping ${res.ms} ms • Jitter ${avgJitter} ms`);
       }
     }
