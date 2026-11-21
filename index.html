@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CallGuard — FaceTime & Wi-Fi Stability Scanner</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #131a26;
+      --border: #1f2a3d;
+      --text: #e6edf7;
+      --muted: #8b9bb4;
+      --good: #10b981;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --accent: #38bdf8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      width: 100%;
+      max-width: 780px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+    }
+    .title-group h1 { font-size: 1.2rem; letter-spacing: 0.5px; }
+    .title-group p { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.88rem;
+      transition: 0.15s ease;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary {
+      background: var(--accent);
+      color: #06101c;
+      border-color: var(--accent);
+    }
+    button.primary.active {
+      background: var(--bad);
+      color: #fff;
+      border-color: var(--bad);
+    }
+    .status-banner {
+      background: var(--panel);
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: border-color 0.25s, background 0.25s;
+    }
+    .status-banner.good { border-color: var(--good); }
+    .status-banner.warn { border-color: var(--warn); background: rgba(245, 158, 11, 0.08); }
+    .status-banner.bad  { border-color: var(--bad);  background: rgba(239, 68, 68, 0.14); }
+    .status-main { display: flex; align-items: center; gap: 14px; }
+    .dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 10px transparent;
+    }
+    .good .dot { background: var(--good); box-shadow: 0 0 12px var(--good); }
+    .warn .dot { background: var(--warn); box-shadow: 0 0 12px var(--warn); }
+    .bad  .dot { background: var(--bad);  box-shadow: 0 0 14px var(--bad); }
+    .status-title { font-size: 1.05rem; font-weight: 700; }
+    .status-sub { font-size: 0.82rem; color: var(--muted); margin-top: 2px; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #1e293b;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .card-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+    .card-val { font-size: 1.65rem; font-weight: 700; margin-top: 6px; }
+    .card-sub { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
+    .chart-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    canvas {
+      width: 100%;
+      height: 170px;
+      display: block;
+      background: #080c12;
+      border-radius: 8px;
+      border: 1px solid #182232;
+    }
+    .settings {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      align-items: center;
+      font-size: 0.84rem;
+    }
+    .settings label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+    select, input[type="checkbox"] {
+      background: #0b0f17;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+    }
+    .log {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      max-height: 150px;
+      overflow-y: auto;
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .log-entry span.time { color: var(--accent); margin-right: 8px; }
+    .log-entry.alert { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-group">
+        <h1>CALLGUARD // FACETIME LINK SCANNER</h1>
+        <p>Low-overhead jitter, packet loss & Wi-Fi stability monitor</p>
+      </div>
+      <div class="controls">
+        <button id="testBeepBtn" type="button">Test Beep</button>
+        <button id="recalBtn" type="button">Recalibrate</button>
+        <button id="toggleBtn" class="primary" type="button">Arm Scanner</button>
+      </div>
+    </header>
+
+    <div id="statusBanner" class="status-banner">
+      <div class="status-main">
+        <div class="dot"></div>
+        <div>
+          <div id="statusTitle" class="status-title">Standby — Ready to Arm</div>
+          <div id="statusSub" class="status-sub">Place this device in the same room as the FaceTime call and click Arm Scanner.</div>
+        </div>
+      </div>
+      <div id="wakeBadge" class="badge">Wake Lock: Off</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-label">Current Ping</div>
+        <div id="pingVal" class="card-val">-- ms</div>
+        <div id="baseSub" class="card-sub">Baseline: -- ms</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Rolling Jitter</div>
+        <div id="jitterVal" class="card-val">-- ms</div>
+        <div class="card-sub">FaceTime limit: < 35 ms</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Packet Loss (30s)</div>
+        <div id="lossVal" class="card-val">0%</div>
+        <div id="dropSub" class="card-sub">0 dropped probes</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Call Quality Score</div>
+        <div id="scoreVal" class="card-val">--</div>
+        <div id="streakSub" class="card-sub">Bad streak: 0 / 2</div>
+      </div>
+    </div>
+
+    <div class="chart-box">
+      <div class="chart-header">
+        <span>LIVE LATENCY & JITTER TIMELINE (LAST 60 PROBES)</span>
+        <span id="endpointLabel">Endpoint: Idle</span>
+      </div>
+      <canvas id="chart" width="740" height="170"></canvas>
+    </div>
+
+    <div class="settings">
+      <label>
+        <input type="checkbox" id="muteCheck" />
+        Mute Audio Alerts
+      </label>
+      <label>
+        Sensitivity:
+        <select id="sensitivity">
+          <option value="strict">Strict (FaceTime HD)</option>
+          <option value="balanced" selected>Balanced (Recommended)</option>
+          <option value="relaxed">Relaxed (Major Drops Only)</option>
+        </select>
+      </label>
+      <label>
+        Beep Cooldown:
+        <select id="cooldown">
+          <option value="5000">5 sec</option>
+          <option value="10000" selected>10 sec</option>
+          <option value="20000">20 sec</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="logBox" class="log">
+      <div class="log-entry"><span class="time">[READY]</span>Click "Arm Scanner" to unlock audio alerts and start 12-second baseline calibration.</div>
+    </div>
+  </div>
+
+  <script>
+    // Diverse fast global anycast endpoints so one server blip never triggers a false alarm
+    const ENDPOINTS = [
+      { name: "Cloudflare Edge", url: "https://1.1.1.1/cdn-cgi/trace" },
+      { name: "Google Edge",     url: "https://www.google.com/generate_204" },
+      { name: "Quad9 DNS",       url: "https://9.9.9.9/" }
+    ];
+
+    const PROBE_INTERVAL_MS = 1200;
+    const TIMEOUT_MS = 850;
+    const CALIBRATION_SAMPLES = 10; // ~12 seconds
+
+    let running = false;
+    let timer = null;
+    let audioCtx = null;
+    let wakeLock = null;
+    let endpointIdx = 0;
+
+    let samples = []; // { ms, ok, jitter }
+    let calibrationBuffer = [];
+    let baselineMs = null;
+    let badStreak = 0;
+    let lastBeepTime = 0;
+    let totalDropped = 0;
+
+    // UI Refs
+    const toggleBtn = document.getElementById("toggleBtn");
+    const testBeepBtn = document.getElementById("testBeepBtn");
+    const recalBtn = document.getElementById("recalBtn");
+    const statusBanner = document.getElementById("statusBanner");
+    const statusTitle = document.getElementById("statusTitle");
+    const statusSub = document.getElementById("statusSub");
+    const wakeBadge = document.getElementById("wakeBadge");
+    const pingVal = document.getElementById("pingVal");
+    const baseSub = document.getElementById("baseSub");
+    const jitterVal = document.getElementById("jitterVal");
+    const lossVal = document.getElementById("lossVal");
+    const dropSub = document.getElementById("dropSub");
+    const scoreVal = document.getElementById("scoreVal");
+    const streakSub = document.getElementById("streakSub");
+    const endpointLabel = document.getElementById("endpointLabel");
+    const muteCheck = document.getElementById("muteCheck");
+    const sensitivitySel = document.getElementById("sensitivity");
+    const cooldownSel = document.getElementById("cooldown");
+    const logBox = document.getElementById("logBox");
+    const canvas = document.getElementById("chart");
+    const ctx = canvas.getContext("2d");
+
+    function logEvent(msg, isAlert = false) {
+      const now = new Date().toLocaleTimeString([], { hour12: false });
+      const div = document.createElement("div");
+      div.className = "log-entry" + (isAlert ? " alert" : "");
+      div.innerHTML = `<span class="time">[${now}]</span>${msg}`;
+      logBox.prepend(div);
+      while (logBox.children.length > 35) logBox.removeChild(logBox.lastChild);
+    }
+
+    function ensureAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === "suspended") audioCtx.resume();
+    }
+
+    function playAlertBeep(type = "warn") {
+      if (muteCheck.checked) return;
+      ensureAudio();
+      const now = audioCtx.currentTime;
+
+      const freqs = type === "bad" ? [880, 660, 880] : [740, 740];
+      freqs.forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, now + i * 0.14);
+
+        gain.gain.setValueAtTime(0.001, now + i * 0.14);
+        gain.gain.exponentialRampToValueAtTime(0.22, now + i * 0.14 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.14 + 0.11);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now + i * 0.14);
+        osc.stop(now + i * 0.14 + 0.12);
+      });
+    }
+
+    async function requestWakeLock() {
+      try {
+        if ("wakeLock" in navigator) {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeBadge.textContent = "Wake Lock: Active";
+          wakeLock.addEventListener("release", () => {
+            wakeBadge.textContent = "Wake Lock: Off";
+          });
+        }
+      } catch {
+        wakeBadge.textContent = "Wake Lock: Unsupported";
+      }
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+      wakeBadge.textContent = "Wake Lock: Off";
+    }
+
+    function getThresholds() {
+      const base = baselineMs || 35;
+      const mode = sensitivitySel.value;
+      if (mode === "strict") {
+        return { maxPing: Math.max(85, base * 2.2), maxJitter: 25, streakLimit: 2 };
+      }
+      if (mode === "relaxed") {
+        return { maxPing: Math.max(180, base * 3.8), maxJitter: 60, streakLimit: 3 };
+      }
+      // balanced
+      return { maxPing: Math.max(120, base * 2.8), maxJitter: 38, streakLimit: 2 };
+    }
+
+    function median(arr) {
+      const s = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    }
+
+    async function runProbe() {
+      if (!running) return;
+      const target = ENDPOINTS[endpointIdx % ENDPOINTS.length];
+      endpointIdx++;
+      endpointLabel.textContent = `Endpoint: ${target.name}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const start = performance.now();
+
+      let latency = TIMEOUT_MS;
+      let ok = false;
+
+      try {
+        // Cache-busted no-cors fetch measures pure round-trip network + TLS/TCP responsiveness
+        await fetch(`${target.url}?_=${Date.now()}-${Math.random()}`, {
+          mode: "no-cors",
+          cache: "no-store",
+          signal: controller.signal
+        });
+        latency = Math.round(performance.now() - start);
+        ok = true;
+      } catch {
+        latency = TIMEOUT_MS;
+        ok = false;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!ok) totalDropped++;
+
+      const prevOk = [...samples].reverse().find(s => s.ok);
+      const jitter = ok && prevOk ? Math.abs(latency - prevOk.ms) : 0;
+
+      samples.push({ ms: latency, ok, jitter });
+      if (samples.length > 60) samples.shift();
+
+      // Calibration phase
+      if (baselineMs === null) {
+        if (ok) calibrationBuffer.push(latency);
+        const progress = Math.min(calibrationBuffer.length, CALIBRATION_SAMPLES);
+        setBanner("warn", `Calibrating Room Baseline (${progress}/${CALIBRATION_SAMPLES})...`, "Keep network normal for a few seconds.");
+        pingVal.textContent = ok ? `${latency} ms` : "TIMEOUT";
+        if (calibrationBuffer.length >= CALIBRATION_SAMPLES) {
+          baselineMs = Math.round(median(calibrationBuffer));
+          baseSub.textContent = `Baseline: ${baselineMs} ms`;
+          logEvent(`Baseline calibrated at ${baselineMs} ms.`);
+        }
+        drawChart();
+        return;
+      }
+
+      evaluateHealth(latency, ok, jitter, target.name);
+      drawChart();
+    }
+
+    function evaluateHealth(latency, ok, jitter, endpointName) {
+      const { maxPing, maxJitter, streakLimit } = getThresholds();
+      const recent25 = samples.slice(-25);
+      const drops = recent25.filter(s => !s.ok).length;
+      const lossPct = Math.round((drops / recent25.length) * 100);
+
+      const validJitters = recent25.filter(s => s.ok).map(s => s.jitter);
+      const avgJitter = validJitters.length
+        ? Math.round(validJitters.reduce((a, b) => a + b, 0) / validJitters.length)
+        : 0;
+
+      pingVal.textContent = ok ? `${latency} ms` : "DROP";
+      jitterVal.textContent = `${avgJitter} ms`;
+      lossVal.textContent = `${lossPct}%`;
+      dropSub.textContent = `${totalDropped} total dropped`;
+
+      const isBadSample = !ok || latency > maxPing || jitter > maxJitter;
+
+      if (isBadSample) {
+        badStreak++;
+      } else {
+        badStreak = Math.max(0, badStreak - 1);
+      }
+
+      streakSub.textContent = `Bad streak: ${badStreak} / ${streakLimit}`;
+
+      // Calculate 0-100 stability score
+      let score = 100;
+      score -= lossPct * 2.5;
+      score -= Math.max(0, avgJitter - 12) * 1.1;
+      if (ok && latency > baselineMs) {
+        score -= Math.min(30, (latency - baselineMs) * 0.25);
+      }
+      score = Math.max(0, Math.min(100, Math.round(score)));
+      scoreVal.textContent = `${score}/100`;
+
+      const now = Date.now();
+      const cooldown = Number(cooldownSel.value);
+
+      if (!ok || badStreak >= streakLimit || lossPct >= 8) {
+        const reason = !ok
+          ? `Packet timeout on ${endpointName}`
+          : latency > maxPing
+          ? `Latency spike (${latency} ms vs ${Math.round(maxPing)} ms limit)`
+          : `High jitter (${jitter} ms) — FaceTime may stutter`;
+
+        setBanner("bad", "INTERFERENCE / CALL RISK DETECTED", reason);
+
+        if (now - lastBeepTime >= cooldown) {
+          playAlertBeep(!ok ? "bad" : "warn");
+          lastBeepTime = now;
+          logEvent(`ALERT: ${reason}`, true);
+        }
+      } else if (badStreak === 1 || avgJitter > maxJitter * 0.75) {
+        setBanner("warn", "Minor Fluctuation Detected", "Monitoring closely — no alarm triggered yet.");
+      } else {
+        setBanner("good", "Link Stable — Safe for FaceTime", `Ping ${latency} ms • Jitter ${avgJitter} ms • 0 recent drops`);
+      }
+    }
+
+    function setBanner(state, title, sub) {
+      statusBanner.className = `status-banner ${state}`;
+      statusTitle.textContent = title;
+      statusSub.textContent = sub;
+    }
+
+    function drawChart() {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      // Grid lines
+      ctx.strokeStyle = "#162033";
+      ctx.lineWidth = 1;
+      [0.25, 0.5, 0.75].forEach(ratio => {
+        const y = h * ratio;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      });
+
+      if (!samples.length) return;
+
+      const { maxPing } = getThresholds();
+      const ceiling = Math.max(250, maxPing * 1.5);
+      const stepX = w / 59;
+
+      // Threshold line
+      const threshY = h - Math.min(1, maxPing / ceiling) * (h - 20) - 10;
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.45)";
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(0, threshY);
+      ctx.lineTo(w, threshY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Ping line
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      samples.forEach((s, i) => {
+        const x = i * stepX;
+        const clamped = Math.min(ceiling, s.ms);
+        const y = h - (clamped / ceiling) * (h - 20) - 10;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = "#38bdf8";
+      ctx.stroke();
+
+      // Points (highlight drops/spikes in red)
+      samples.forEach((s, i) => {
+        const x = i * stepX;
+        const clamped = Math.min(ceiling, s.ms);
+        const y = h - (clamped / ceiling) * (h - 20) - 10;
+        ctx.fillStyle = !s.ok || s.ms > maxPing ? "#ef4444" : "#10b981";
+        ctx.beginPath();
+        ctx.arc(x, y, !s.ok || s.ms > maxPing ? 4 : 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function startScanner() {
+      ensureAudio();
+      running = true;
+      toggleBtn.textContent = "Disarm Scanner";
+      toggleBtn.classList.add("active");
+      requestWakeLock();
+      logEvent("Scanner armed. Probing network every 1.2s...");
+      runProbe();
+      timer = setInterval(runProbe, PROBE_INTERVAL_MS);
+    }
+
+    function stopScanner() {
+      running = false;
+      clearInterval(timer);
+      toggleBtn.textContent = "Arm Scanner";
+      toggleBtn.classList.remove("active");
+      releaseWakeLock();
+      setBanner("", "Standby — Scanner Disarmed", "Click Arm Scanner to resume monitoring.");
+      endpointLabel.textContent = "Endpoint: Idle";
+      logEvent("Scanner disarmed.");
+    }
+
+    toggleBtn.addEventListener("click", () => {
+      if (running) stopScanner();
+      else startScanner();
+    });
+
+    testBeepBtn.addEventListener("click", () => {
+      playAlertBeep("bad");
+      logEvent("Played test alert tone.");
+    });
+
+    recalBtn.addEventListener("click", () => {
+      baselineMs = null;
+      calibrationBuffer = [];
+      badStreak = 0;
+      baseSub.textContent = "Baseline: Calibrating...";
+      logEvent("Recalibrating baseline...");
+    });
+  </script>
+</body>
+</html>
