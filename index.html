@@ -177,7 +177,7 @@
     <header>
       <div class="title-group">
         <h1>CALLGUARD // FACETIME LINK SCANNER</h1>
-        <p>Low-overhead jitter, packet loss & Wi-Fi stability monitor</p>
+        <p>Low-overhead jitter, packet loss &amp; Wi-Fi stability monitor</p>
       </div>
       <div class="controls">
         <button id="testBeepBtn" type="button">Test Beep</button>
@@ -206,10 +206,10 @@
       <div class="card">
         <div class="card-label">Rolling Jitter</div>
         <div id="jitterVal" class="card-val">-- ms</div>
-        <div class="card-sub">FaceTime limit: < 35 ms</div>
+        <div class="card-sub">FaceTime target: &lt; 35 ms</div>
       </div>
       <div class="card">
-        <div class="card-label">Packet Loss (30s)</div>
+        <div class="card-label">Packet Loss (25p)</div>
         <div id="lossVal" class="card-val">0%</div>
         <div id="dropSub" class="card-sub">0 dropped probes</div>
       </div>
@@ -222,7 +222,7 @@
 
     <div class="chart-box">
       <div class="chart-header">
-        <span>LIVE LATENCY & JITTER TIMELINE (LAST 60 PROBES)</span>
+        <span>LIVE LATENCY &amp; JITTER TIMELINE (LAST 60 PROBES)</span>
         <span id="endpointLabel">Endpoint: Idle</span>
       </div>
       <canvas id="chart" width="740" height="170"></canvas>
@@ -257,7 +257,6 @@
   </div>
 
   <script>
-    // Diverse fast global anycast endpoints so one server blip never triggers a false alarm
     const ENDPOINTS = [
       { name: "Cloudflare Edge", url: "https://1.1.1.1/cdn-cgi/trace" },
       { name: "Google Edge",     url: "https://www.google.com/generate_204" },
@@ -278,10 +277,10 @@
     let calibrationBuffer = [];
     let baselineMs = null;
     let badStreak = 0;
+    let dropStreak = 0;
     let lastBeepTime = 0;
     let totalDropped = 0;
 
-    // UI Refs
     const toggleBtn = document.getElementById("toggleBtn");
     const testBeepBtn = document.getElementById("testBeepBtn");
     const recalBtn = document.getElementById("recalBtn");
@@ -369,13 +368,12 @@
       const base = baselineMs || 35;
       const mode = sensitivitySel.value;
       if (mode === "strict") {
-        return { maxPing: Math.max(85, base * 2.2), maxJitter: 25, streakLimit: 2 };
+        return { maxPing: Math.max(85, base * 2.2), maxJitter: 25, streakLimit: 2, dropStreakLimit: 2 };
       }
       if (mode === "relaxed") {
-        return { maxPing: Math.max(180, base * 3.8), maxJitter: 60, streakLimit: 3 };
+        return { maxPing: Math.max(180, base * 3.8), maxJitter: 60, streakLimit: 3, dropStreakLimit: 3 };
       }
-      // balanced
-      return { maxPing: Math.max(120, base * 2.8), maxJitter: 38, streakLimit: 2 };
+      return { maxPing: Math.max(120, base * 2.8), maxJitter: 38, streakLimit: 2, dropStreakLimit: 2 };
     }
 
     function median(arr) {
@@ -398,7 +396,6 @@
       let ok = false;
 
       try {
-        // Cache-busted no-cors fetch measures pure round-trip network + TLS/TCP responsiveness
         await fetch(`${target.url}?_=${Date.now()}-${Math.random()}`, {
           mode: "no-cors",
           cache: "no-store",
@@ -413,7 +410,12 @@
         clearTimeout(timeoutId);
       }
 
-      if (!ok) totalDropped++;
+      if (!ok) {
+        totalDropped++;
+        dropStreak++;
+      } else {
+        dropStreak = 0;
+      }
 
       const prevOk = [...samples].reverse().find(s => s.ok);
       const jitter = ok && prevOk ? Math.abs(latency - prevOk.ms) : 0;
@@ -421,7 +423,6 @@
       samples.push({ ms: latency, ok, jitter });
       if (samples.length > 60) samples.shift();
 
-      // Calibration phase
       if (baselineMs === null) {
         if (ok) calibrationBuffer.push(latency);
         const progress = Math.min(calibrationBuffer.length, CALIBRATION_SAMPLES);
@@ -441,7 +442,7 @@
     }
 
     function evaluateHealth(latency, ok, jitter, endpointName) {
-      const { maxPing, maxJitter, streakLimit } = getThresholds();
+      const { maxPing, maxJitter, streakLimit, dropStreakLimit } = getThresholds();
       const recent25 = samples.slice(-25);
       const drops = recent25.filter(s => !s.ok).length;
       const lossPct = Math.round((drops / recent25.length) * 100);
@@ -466,7 +467,6 @@
 
       streakSub.textContent = `Bad streak: ${badStreak} / ${streakLimit}`;
 
-      // Calculate 0-100 stability score
       let score = 100;
       score -= lossPct * 2.5;
       score -= Math.max(0, avgJitter - 12) * 1.1;
@@ -478,10 +478,13 @@
 
       const now = Date.now();
       const cooldown = Number(cooldownSel.value);
+      const confirmedDrop = dropStreak >= dropStreakLimit;
 
-      if (!ok || badStreak >= streakLimit || lossPct >= 8) {
-        const reason = !ok
-          ? `Packet timeout on ${endpointName}`
+      if (confirmedDrop || badStreak >= streakLimit || lossPct >= 12) {
+        const reason = confirmedDrop
+          ? `Repeated probe drops/blocks on ${endpointName} (${dropStreak} in a row)`
+          : !ok
+          ? `Probe timeout/error on ${endpointName} (watching for repeat)`
           : latency > maxPing
           ? `Latency spike (${latency} ms vs ${Math.round(maxPing)} ms limit)`
           : `High jitter (${jitter} ms) — FaceTime may stutter`;
@@ -489,12 +492,12 @@
         setBanner("bad", "INTERFERENCE / CALL RISK DETECTED", reason);
 
         if (now - lastBeepTime >= cooldown) {
-          playAlertBeep(!ok ? "bad" : "warn");
+          playAlertBeep(confirmedDrop ? "bad" : "warn");
           lastBeepTime = now;
           logEvent(`ALERT: ${reason}`, true);
         }
-      } else if (badStreak === 1 || avgJitter > maxJitter * 0.75) {
-        setBanner("warn", "Minor Fluctuation Detected", "Monitoring closely — no alarm triggered yet.");
+      } else if (!ok || badStreak === 1 || avgJitter > maxJitter * 0.75) {
+        setBanner("warn", "Minor Fluctuation Detected", "Monitoring closely — waiting to confirm before alarm.");
       } else {
         setBanner("good", "Link Stable — Safe for FaceTime", `Ping ${latency} ms • Jitter ${avgJitter} ms • 0 recent drops`);
       }
@@ -511,7 +514,6 @@
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
-      // Grid lines
       ctx.strokeStyle = "#162033";
       ctx.lineWidth = 1;
       [0.25, 0.5, 0.75].forEach(ratio => {
@@ -528,7 +530,6 @@
       const ceiling = Math.max(250, maxPing * 1.5);
       const stepX = w / 59;
 
-      // Threshold line
       const threshY = h - Math.min(1, maxPing / ceiling) * (h - 20) - 10;
       ctx.strokeStyle = "rgba(245, 158, 11, 0.45)";
       ctx.setLineDash([5, 5]);
@@ -538,7 +539,6 @@
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Ping line
       ctx.lineWidth = 2.2;
       ctx.beginPath();
       samples.forEach((s, i) => {
@@ -551,7 +551,6 @@
       ctx.strokeStyle = "#38bdf8";
       ctx.stroke();
 
-      // Points (highlight drops/spikes in red)
       samples.forEach((s, i) => {
         const x = i * stepX;
         const clamped = Math.min(ceiling, s.ms);
@@ -592,16 +591,19 @@
 
     testBeepBtn.addEventListener("click", () => {
       playAlertBeep("bad");
-      logEvent("Played test alert tone.");
+      logEvent("Played test alarm beep.");
     });
 
     recalBtn.addEventListener("click", () => {
       baselineMs = null;
       calibrationBuffer = [];
       badStreak = 0;
+      dropStreak = 0;
       baseSub.textContent = "Baseline: Calibrating...";
       logEvent("Recalibrating baseline...");
     });
+
+    drawChart();
   </script>
 </body>
 </html>
